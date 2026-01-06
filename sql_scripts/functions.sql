@@ -71,9 +71,3 @@ BEGIN
     RETURN QUERY SELECT v_total_time, v_count;
 END;
 $$ LANGUAGE plpgsql;
-
-
-
-select * from func_user_stats(10002, '1 day')
-select * from users
-select * from reservations
