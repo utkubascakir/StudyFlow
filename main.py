@@ -22,7 +22,7 @@ def main(page: ft.Page):
 
     # --- DEĞİŞKENLER (State) ---
     current_user = None 
-    selected_room_id = [1]  # Liste olarak tutuyoruz ki fonksiyonlar içinden güncellenebilsin
+    selected_room_id = [1]
 
     # --- YARDIMCI BİLEŞEN: MESAJ KUTUSU ---
     def show_message(text, color=ft.Colors.GREEN):
@@ -71,7 +71,7 @@ def main(page: ft.Page):
         )
 
         page.add(ft.Container(content=register_card, alignment=ft.Alignment(0, 0), expand=True, bgcolor=bg_color))
-        page.update()  # ÖNEMLİ: Sayfa güncellemesi eklendi
+        page.update()
 
 
     # ==========================================
@@ -146,131 +146,227 @@ def main(page: ft.Page):
     def show_reservation_tab():
         content_area.controls.clear()
         
+        # Odaları veritabanından çek
         rooms = db.get_rooms() or []
         
         if not rooms:
-            content_area.controls.append(ft.Text("Veritabanında oda bulunamadı!", color=ft.Colors.RED))
+            content_area.controls.append(ft.Text("Veritabanında oda bulunamadı! Lütfen 'study_rooms' tablosuna veri ekleyin.", color=ft.Colors.RED))
             page.update()
             return
-            
+
+        # Dropdown seçeneklerini hazırla
         room_options = [ft.dropdown.Option(key=str(r[0]), text=r[1]) for r in rooms]
 
-        # İlk odanın ID'sini varsayılan olarak ayarla
-        if rooms:
+        # Eğer seçili oda yoksa ilk odayı seç
+        if not selected_room_id or selected_room_id[0] not in [r[0] for r in rooms]:
             selected_room_id[0] = rooms[0][0]
 
         room_dropdown = ft.Dropdown(
             label="Çalışma Odası Seç", 
             width=250,
             options=room_options,
-            value=str(selected_room_id[0])
+            value=str(selected_room_id[0]) # Seçili olanın ID'si string olarak
         )
 
-        quick_select = ft.Dropdown(label="Hızlı Boş Masa Seç (Liste)", width=250, options=[])
-        tables_grid = ft.GridView(expand=True, runs_count=5, max_extent=150, child_aspect_ratio=1.0, spacing=10, run_spacing=10)
+        quick_select = ft.Dropdown(label="Hızlı Boş Masa Seç", width=250, options=[])
+        
+        # Masaların duracağı kapsayıcı (Column)
+        tables_container = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True)
 
+        # GRID YENİLEME FONKSİYONU
         def refresh_grid(room_id):
-            selected_room_id[0] = room_id
+            print(f"UI UPDATE: Oda {room_id} yükleniyor...") # Konsola bak
+            
+            # Global değişkeni güncelle
+            selected_room_id[0] = int(room_id)
+            
+            # Konteynerı temizle
+            tables_container.controls.clear()
             
             try:
+                # Veritabanından çek
                 statuses = db.get_room_status(room_id, datetime.now())
-                tables_grid.controls.clear()
-
-                if not statuses:
-                    tables_grid.controls.append(ft.Text("Bu odada masa bulunamadı!", color=ft.Colors.ORANGE))
-                    page.update()
-                    return
-
+                
+                # Boş masa listesini güncelle (Hızlı seçim için)
                 avail_tables = db.get_available_tables_list(room_id)
                 quick_select.options = [ft.dropdown.Option(str(t)) for t in avail_tables]
+                quick_select.value = None # Seçimi sıfırla
 
-                for table in statuses:
-                    t_id, t_num, status, until = table
-                    
-                    bg_c = ft.Colors.GREEN_700 if status == 'BOŞ' else ft.Colors.RED_800
-                    icon = ft.Icons.CHAIR if status == 'BOŞ' else ft.Icons.PERSON_OFF
-                    
-                    card = ft.Container(
-                        content=ft.Column([
-                            ft.Icon(icon, size=40, color="white"),
-                            ft.Text(f"Masa {t_num}", size=20, weight="bold"),
-                            ft.Text(status, color="white70"),
-                            ft.Text(f"{until.strftime('%H:%M')}'e kadar" if until else "Müsait", size=12)
-                        ], alignment="center", horizontal_alignment="center"),
-                        bgcolor=bg_c, border_radius=15, padding=10,
-                        on_click=lambda e, tid=t_id, tnum=t_num, st=status: open_res_dialog(tid, tnum) if st == 'BOŞ' else show_message("Bu masa dolu!", ft.Colors.RED)
+                if not statuses:
+                    tables_container.controls.append(
+                        ft.Container(
+                            content=ft.Text("Bu odada tanımlı masa yok.", size=16, color=ft.Colors.ORANGE),
+                            padding=20
+                        )
                     )
-                    tables_grid.controls.append(card)
+                else:
+                    # Masaları kartlara dönüştür
+                    rows = []
+                    current_row = []
+                    
+                    for idx, table in enumerate(statuses):
+                        t_id, t_num, status, until = table
+                        
+                        is_empty = (status == 'BOŞ')
+                        bg_c = ft.Colors.GREEN_700 if is_empty else ft.Colors.RED_800
+                        icon = ft.Icons.CHAIR if is_empty else ft.Icons.PERSON_OFF
+                        
+                        card = ft.Container(
+                            content=ft.Column([
+                                ft.Icon(icon, size=30, color="white"),
+                                ft.Text(f"Masa {t_num}", size=14, weight="bold"),
+                                ft.Text(status, size=11, color="white70"),
+                                ft.Text(
+                                    f"{until.strftime('%H:%M')}'e kadar" if until else "Müsait", 
+                                    size=10, color="white60"
+                                )
+                            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=3),
+                            bgcolor=bg_c, 
+                            border_radius=12, 
+                            padding=8,
+                            width=100,
+                            height=100,
+                            # Tıklama olayına dikkat: Lambda içinde değişkenleri donduruyoruz (tid=t_id)
+                            on_click=lambda e, tid=t_id, tnum=t_num, free=is_empty: open_res_dialog(tid, tnum) if free else show_message("Bu masa dolu!", ft.Colors.RED),
+                            ink=True
+                        )
+                        
+                        current_row.append(card)
+                        
+                        # Her 6 masada bir alt satıra geç
+                        if len(current_row) == 6 or idx == len(statuses) - 1:
+                            rows.append(ft.Row(controls=current_row, spacing=10, wrap=False))
+                            current_row = []
+                    
+                    # Satırları ekrana ekle
+                    tables_container.controls.extend(rows)
+
+            except Exception as e:
+                print(f"HATA: Grid yenileme patladı: {e}")
+                tables_container.controls.append(ft.Text(f"Hata oluştu: {e}", color=ft.Colors.RED))
+            
+            # En son sayfayı güncelle
+            page.update()
+
+        # Dropdown değiştiğinde çalışacak
+        def on_room_change(e):
+            new_id = int(e.control.value)
+            refresh_grid(new_id)
+
+        room_dropdown.on_change = on_room_change
+
+        # Öneri Butonu Mantığı
+        def get_suggestion(e):
+            current_room = selected_room_id[0]
+            print(f"Öneri isteniyor... Oda ID: {current_room}")
+            
+            try:
+                # 2 saatlik öneri iste
+                msg = db.get_suggestion(current_room, datetime.now(), 2)
                 
+                # SnackBar ile göster
+                page.snack_bar = ft.SnackBar(content=ft.Text(str(msg)), bgcolor=ft.Colors.CYAN)
+                page.snack_bar.open = True
                 page.update()
                 
-            except Exception as e:
-                show_message(f"Grid yenileme hatası: {str(e)}", ft.Colors.RED)
-                print(f"Refresh grid error: {e}")
-
-        # Dropdown'ın on_change'ini ayarla
-        room_dropdown.on_change = lambda e: refresh_grid(int(e.control.value))
-
-        def get_suggestion(e):
-            try:
-                msg = db.get_suggestion(selected_room_id[0], datetime.now(), 2)
-                show_message(msg, ft.Colors.CYAN)
             except Exception as ex:
-                show_message(f"Öneri hatası: {str(ex)}", ft.Colors.RED)
-                print(f"Suggestion error: {ex}")
+                print(f"Öneri hatası: {ex}")
 
+        # Başlık ve Filtreler
         header = ft.Row([
             ft.Text("Masa Durumu", size=25, weight="bold"),
             ft.Container(expand=True), 
-            ft.FilledButton("Bana Yer Öner", icon=ft.Icons.LIGHTBULB, on_click=get_suggestion)
+            ft.FilledButton(
+                "Bana Yer Öner", 
+                icon=ft.Icons.LIGHTBULB, 
+                on_click=get_suggestion,
+                style=ft.ButtonStyle(bgcolor=primary_color)
+            )
         ])
         
-        filters = ft.Row([room_dropdown, quick_select])
+        filters = ft.Row([room_dropdown, quick_select], spacing=20)
         
+        # Sayfaya bileşenleri yerleştir
         content_area.controls.extend([
             ft.Container(content=header, padding=20),
-            ft.Container(content=filters, padding=ft.Padding.only(left=20, right=20, bottom=20)),
-            ft.Container(content=tables_grid, expand=True, padding=20)
+            ft.Container(content=filters, padding=ft.padding.only(left=20, right=20, bottom=20)),
+            ft.Container(content=tables_container, expand=True, padding=20)
         ])
         
+        # İlk açılışta gridi yükle
         refresh_grid(selected_room_id[0])
         page.update()
 
     def open_res_dialog(table_id, table_num):
-        start_hour = ft.Dropdown(label="Başlangıç", options=[ft.dropdown.Option(str(i)) for i in range(9, 18)], value="9", width=120)
-        duration = ft.Dropdown(label="Süre (Saat)", options=[ft.dropdown.Option(str(i)) for i in range(1, 6)], value="1", width=120)
+        start_hour = ft.Dropdown(
+            label="Başlangıç Saati", 
+            options=[ft.dropdown.Option(str(i)) for i in range(9, 18)], 
+            value="9", 
+            width=150
+        )
+        duration = ft.Dropdown(
+            label="Süre (Saat)", 
+            options=[ft.dropdown.Option(str(i)) for i in range(1, 6)], 
+            value="2", 
+            width=150
+        )
         
         def close_dlg(e):
             dlg.open = False
             page.update()
 
         def confirm_res(e):
-            now = datetime.now()
-            s_h = int(start_hour.value)
-            dur = int(duration.value)
-            
-            start_time = now.replace(hour=s_h, minute=0, second=0, microsecond=0)
-            end_time = start_time.replace(hour=s_h + dur)
-            
-            res = db.create_reservation(current_user[0], table_id, start_time, end_time)
-            
-            if "SUCCESS" in res:
-                show_message("Rezervasyon Başarılı!", ft.Colors.GREEN)
-                close_dlg(None)
-                show_reservation_tab()
-            else:
-                show_message(res, ft.Colors.RED)
+            try:
+                now = datetime.now()
+                s_h = int(start_hour.value)
+                dur = int(duration.value)
+                
+                start_time = now.replace(hour=s_h, minute=0, second=0, microsecond=0)
+                end_time = start_time.replace(hour=s_h + dur)
+                
+                print(f"Rezervasyon oluşturuluyor: User={current_user[0]}, Table={table_id}, Start={start_time}, End={end_time}")
+                
+                res = db.create_reservation(current_user[0], table_id, start_time, end_time)
+                
+                if "SUCCESS" in res:
+                    show_message("Rezervasyon Başarılı!", ft.Colors.GREEN)
+                    close_dlg(None)
+                    show_reservation_tab()  # Sayfayı yenile
+                else:
+                    show_message(res, ft.Colors.RED)
+            except Exception as ex:
+                show_message(f"Rezervasyon hatası: {str(ex)}", ft.Colors.RED)
+                print(f"Reservation error: {ex}")
+                import traceback
+                traceback.print_exc()
 
         dlg = ft.AlertDialog(
-            title=ft.Text(f"Masa {table_num} Rezerve Et"),
-            content=ft.Column([
-                ft.Text("Bugün için saat seçiniz:"),
-                ft.Row([start_hour, duration])
-            ], height=100),
+            modal=True,
+            title=ft.Text(f"Masa {table_num} Rezervasyonu", weight="bold"),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text("Rezervasyon detaylarını seçiniz:", size=14, color=text_grey),
+                    ft.Divider(height=10, color="transparent"),
+                    ft.Row([start_hour, duration], spacing=20),
+                    ft.Divider(height=10, color="transparent"),
+                    ft.Text(
+                        "⚠️ Seçtiğiniz saat aralığında masa müsait olmalıdır.", 
+                        size=12, 
+                        color=ft.Colors.ORANGE_300,
+                        italic=True
+                    )
+                ], tight=True),
+                padding=10
+            ),
             actions=[
                 ft.TextButton("İptal", on_click=close_dlg),
-                ft.FilledButton("Onayla", on_click=confirm_res)
-            ]
+                ft.FilledButton(
+                    "Rezerve Et", 
+                    on_click=confirm_res,
+                    style=ft.ButtonStyle(bgcolor=primary_color)
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END
         )
         page.dialog = dlg
         dlg.open = True
@@ -291,27 +387,43 @@ def main(page: ft.Page):
             width=250
         )
         
-        result_text = ft.Text("Seçim yapınız...", size=20)
+        result_text = ft.Text("Hesapla butonuna basarak istatistiklerinizi görüntüleyin.", size=16, color=text_grey)
         
         def calculate(e):
             try:
                 stats = db.get_user_stats(current_user[0], period_drop.value)
                 if stats:
                     sure, oturum = stats
-                    result_text.value = f"Toplam Oturum: {oturum}\nToplam Süre: {str(sure)}"
+                    result_text.value = f"📊 Toplam Oturum: {oturum}\n⏱️ Toplam Süre: {str(sure)}"
+                    result_text.color = text_white
                 else:
-                    result_text.value = "Veri bulunamadı."
+                    result_text.value = "Henüz veri bulunmuyor."
+                    result_text.color = ft.Colors.ORANGE
                 page.update()
             except Exception as ex:
                 show_message(f"İstatistik hatası: {str(ex)}", ft.Colors.RED)
                 print(f"Stats error: {ex}")
 
         content_area.controls.extend([
-            ft.Container(content=ft.Text("Verimlilik İstatistikleri", size=30, weight="bold"), padding=20),
+            ft.Container(content=ft.Text("📈 Verimlilik İstatistikleri", size=30, weight="bold"), padding=20),
             ft.Divider(),
             ft.Container(content=period_drop, padding=20),
-            ft.Container(content=ft.FilledButton("Hesapla", on_click=calculate), padding=20),
-            ft.Container(content=result_text, padding=20, bgcolor=card_bg, border_radius=10, margin=20)
+            ft.Container(
+                content=ft.FilledButton(
+                    "Hesapla", 
+                    on_click=calculate,
+                    icon=ft.Icons.CALCULATE,
+                    style=ft.ButtonStyle(bgcolor=primary_color)
+                ), 
+                padding=20
+            ),
+            ft.Container(
+                content=result_text, 
+                padding=20, 
+                bgcolor=card_bg, 
+                border_radius=10, 
+                margin=20
+            )
         ])
         page.update()
 
@@ -324,18 +436,24 @@ def main(page: ft.Page):
             
             if not rows:
                 content_area.controls.extend([
-                    ft.Container(content=ft.Text("Rezervasyon Geçmişim", size=30, weight="bold"), padding=20),
+                    ft.Container(content=ft.Text("📜 Rezervasyon Geçmişim", size=30, weight="bold"), padding=20),
                     ft.Divider(),
-                    ft.Text("Henüz rezervasyonunuz bulunmuyor.", color=ft.Colors.GREY)
+                    ft.Container(
+                        content=ft.Text("Henüz rezervasyonunuz bulunmuyor.", size=16),
+                        padding=20,
+                        bgcolor=card_bg,
+                        border_radius=10,
+                        margin=20
+                    )
                 ])
             else:
                 data_table = ft.DataTable(
                     columns=[
-                        ft.DataColumn(ft.Text("Oda")),
-                        ft.DataColumn(ft.Text("Masa")),
-                        ft.DataColumn(ft.Text("Başlangıç")),
-                        ft.DataColumn(ft.Text("Bitiş")),
-                        ft.DataColumn(ft.Text("Durum")),
+                        ft.DataColumn(ft.Text("Oda", weight="bold")),
+                        ft.DataColumn(ft.Text("Masa", weight="bold")),
+                        ft.DataColumn(ft.Text("Başlangıç", weight="bold")),
+                        ft.DataColumn(ft.Text("Bitiş", weight="bold")),
+                        ft.DataColumn(ft.Text("Durum", weight="bold")),
                     ],
                     rows=[
                         ft.DataRow(cells=[
@@ -345,11 +463,12 @@ def main(page: ft.Page):
                             ft.DataCell(ft.Text(r[4].strftime('%H:%M'))),
                             ft.DataCell(ft.Text(r[5])),
                         ]) for r in rows
-                    ]
+                    ],
+                    border=ft.border.all(1, "white10"),
                 )
                 
                 content_area.controls.extend([
-                    ft.Container(content=ft.Text("Rezervasyon Geçmişim", size=30, weight="bold"), padding=20),
+                    ft.Container(content=ft.Text("📜 Rezervasyon Geçmişim", size=30, weight="bold"), padding=20),
                     ft.Divider(),
                     ft.Container(content=data_table, padding=20)
                 ])
@@ -364,40 +483,56 @@ def main(page: ft.Page):
         page.clean()
         
         try:
+            # Veritabanından verileri çek
             rows = db.get_all_reservations_admin()
             
+            # Tabloyu oluştur
             admin_table = ft.DataTable(
                 columns=[
-                    ft.DataColumn(ft.Text("Öğrenci")),
-                    ft.DataColumn(ft.Text("Oda")),
-                    ft.DataColumn(ft.Text("Masa")),
-                    ft.DataColumn(ft.Text("Tarih")),
-                    ft.DataColumn(ft.Text("Durum")),
+                    ft.DataColumn(ft.Text("Öğrenci", weight="bold")),
+                    ft.DataColumn(ft.Text("Oda", weight="bold")),
+                    ft.DataColumn(ft.Text("Masa", weight="bold")),
+                    ft.DataColumn(ft.Text("Tarih", weight="bold")),
+                    ft.DataColumn(ft.Text("Durum", weight="bold")),
                 ],
                 rows=[
                     ft.DataRow(cells=[
-                        ft.DataCell(ft.Text(r[1])),
-                        ft.DataCell(ft.Text(r[2])),
-                        ft.DataCell(ft.Text(str(r[3]))),
-                        ft.DataCell(ft.Text(r[4].strftime('%d.%m %H:%M'))),
-                        ft.DataCell(ft.Text(r[6])),
+                        ft.DataCell(ft.Text(r[1])), # Ad Soyad
+                        ft.DataCell(ft.Text(r[2])), # Oda Adı
+                        ft.DataCell(ft.Text(str(r[3]))), # Masa No
+                        ft.DataCell(ft.Text(r[4].strftime('%d.%m %H:%M'))), # Başlangıç
+                        ft.DataCell(ft.Text(r[6])), # Durum
                     ]) for r in rows
                 ],
-                border=ft.Border.all(1, "white10"),
-                vertical_lines=ft.Border.all(1, "white10"),
+                border=ft.border.all(1, "white10"),
+                vertical_lines=ft.border.all(1, "white10"),
             )
             
-            page.add(
-                ft.Column([
-                    ft.Row([ft.Text("Yönetici Paneli", size=30, weight="bold"), ft.IconButton(ft.Icons.LOGOUT, on_click=lambda e: load_login_page())], alignment="spaceBetween"),
-                    ft.Text("Tüm Rezervasyonlar (VIEW Kullanımı)", color="grey"),
+            # DÜZELTME BURADA YAPILDI:
+            # ft.Column içindeki 'padding' kaldırıldı.
+            # Bunun yerine ft.Container kullanıldı.
+            content = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text("🔐 Yönetici Paneli", size=30, weight="bold"), 
+                        ft.IconButton(ft.Icons.LOGOUT, on_click=lambda e: load_login_page(), tooltip="Çıkış Yap")
+                    ], alignment="spaceBetween"),
+                    ft.Text("Tüm Rezervasyonlar", color="grey"),
                     ft.Divider(),
-                    ft.Container(content=admin_table, expand=True)
-                ], expand=True, padding=20, scroll=ft.ScrollMode.AUTO)
+                    ft.Container(content=admin_table, expand=True) # Tabloyu saran container
+                ], expand=True, scroll=ft.ScrollMode.AUTO),
+                
+                padding=20, # Padding buraya (Container'a) verildi
+                expand=True
             )
+
+            page.add(content)
+
         except Exception as e:
             show_message(f"Admin panel hatası: {str(e)}", ft.Colors.RED)
             print(f"Admin panel error: {e}")
+            import traceback
+            traceback.print_exc()
             
         page.update()
 

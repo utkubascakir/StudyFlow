@@ -202,3 +202,26 @@ CREATE TRIGGER trg_prevent_double_booking
 BEFORE INSERT ON reservations
 FOR EACH ROW
 EXECUTE FUNCTION check_overlap_func();
+
+
+
+-- Mevcut trigger zaten var, bu fonksiyon sadece sarmalayıcı (wrapper) olacak.
+CREATE OR REPLACE FUNCTION func_create_reservation(
+    p_user_id INT,
+    p_table_id INT,
+    p_start_time TIMESTAMP,
+    p_end_time TIMESTAMP
+) RETURNS TEXT AS $$
+BEGIN
+    -- Basit Insert işlemi
+    -- Çakışma kontrolünü zaten 'trg_check_overlap_func' trigger'ı yapacak.
+    INSERT INTO reservations (user_id, table_id, start_time, end_time, status)
+    VALUES (p_user_id, p_table_id, p_start_time, p_end_time, 'active');
+
+    RETURN 'SUCCESS';
+EXCEPTION
+    -- Trigger bir hata fırlatırsa (RAISE EXCEPTION) burası yakalar
+    WHEN OTHERS THEN
+        RETURN 'HATA: ' || SQLERRM;
+END;
+$$ LANGUAGE plpgsql;
