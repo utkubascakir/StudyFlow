@@ -16,6 +16,7 @@ class Database:
     def connect(self):
         try:
             self.conn = psycopg2.connect(**self.db_config)
+            self.conn.autocommit = False  # Transaction kontrolü için
             print("Veritabanı bağlantısı başarılı!")
         except Exception as e:
             print(f"Bağlantı Hatası: {e}")
@@ -24,71 +25,64 @@ class Database:
     def login(self, email, password):
         try:
             cur = self.conn.cursor()
-            # func_login fonksiyonunu çağırıyoruz
             cur.execute("SELECT * FROM func_login(%s, %s)", (email, password))
             user = cur.fetchone()
             cur.close()
-            # Dönüş: (user_id, first_name, role, message)
             return user
         except Exception as e:
             print(f"Login Hatası: {e}")
             return None
         
-    # --- YENİ EKLENECEK: KAYIT FONKSİYONU ---
+    # --- KAYIT FONKSİYONU ---
     def register_user(self, first_name, last_name, email, password):
         try:
             cur = self.conn.cursor()
-            # Trigger hatasını yakalamak için SQL fonksiyonunu çağırıyoruz
             cur.execute("SELECT func_register_user(%s, %s, %s, %s)", (first_name, last_name, email, password))
-            result = cur.fetchone()[0] # 'SUCCESS' veya Hata mesajı döner
+            result = cur.fetchone()[0]
             
-            self.conn.commit() # Değişikliği kaydet
+            self.conn.commit()
             cur.close()
             return result
         except Exception as e:
             self.conn.rollback()
-            # Trigger hatasını temizle
             error_msg = str(e)
+            print(f"Kayıt Hatası: {error_msg}")
+            
             if "Şifre en az 4 karakter" in error_msg:
                 return "HATA: Şifre çok kısa! (Min 4 karakter)"
+            elif "already exists" in error_msg or "duplicate key" in error_msg:
+                return "HATA: Bu e-posta adresi zaten kayıtlı!"
             return f"Kayıt Hatası: {error_msg}"
 
-    # --- 2. ODA VE MASA DURUMLARI (Grid View İçin) ---
+    # --- 2. ODA VE MASA DURUMLARI ---
     def get_rooms(self):
-        """Arayüzdeki Dropdown'ı doldurmak için odaları çeker."""
         try:
             cur = self.conn.cursor()
-            cur.execute("SELECT room_id, room_name, capacity FROM study_rooms")
+            cur.execute("SELECT room_id, room_name, capacity FROM study_rooms ORDER BY room_id")
             rooms = cur.fetchall()
             cur.close()
+            print(f"Bulunan odalar: {rooms}")  # Debug için
             return rooms
         except Exception as e:
             print(f"Oda Getirme Hatası: {e}")
             return []
 
     def get_room_status(self, room_id, check_time):
-        """
-        Grid View'daki kartların renklerini belirler.
-        func_get_room_status SQL fonksiyonunu kullanır.
-        """
         try:
             cur = self.conn.cursor()
-            # check_time bir datetime objesi olmalı
             cur.execute("SELECT * FROM func_get_room_status(%s, %s)", (room_id, check_time))
             results = cur.fetchall()
             cur.close()
-            # Dönüş: [(table_id, table_number, 'DOLU'/'BOŞ', until_time), ...]
+            print(f"Oda {room_id} durum sorgusu: {len(results)} masa bulundu")  # Debug için
             return results
         except Exception as e:
             print(f"Durum Sorgu Hatası: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
-    # --- 3. REZERVASYON İŞLEMLERİ (Madde 4 & 12: Insert ve Trigger) ---
+    # --- 3. REZERVASYON İŞLEMLERİ ---
     def create_reservation(self, user_id, table_id, start_time, end_time):
-        """
-        Yeni rezervasyon ekler.
-        Eğer çakışma varsa Trigger devreye girer ve hata fırlatır.
-        """
         try:
             cur = self.conn.cursor()
             query = """
@@ -96,19 +90,19 @@ class Database:
                 VALUES (%s, %s, %s, %s, 'active')
             """
             cur.execute(query, (user_id, table_id, start_time, end_time))
-            self.conn.commit() # Değişikliği kaydet
+            self.conn.commit()
             cur.close()
             return "SUCCESS"
         except Exception as e:
-            self.conn.rollback() # Hata olursa işlemi geri al
-            # Trigger'dan gelen hatayı yakala ve temizle
+            self.conn.rollback()
             error_msg = str(e)
-            if "ÇAKIŞMA VAR" in error_msg:
+            print(f"Rezervasyon Hatası: {error_msg}")
+            
+            if "ÇAKIŞMA VAR" in error_msg or "overlaps" in error_msg:
                 return "HATA: Seçtiğiniz saat aralığında bu masa dolu!"
             return f"Beklenmedik Hata: {error_msg}"
 
     def cancel_reservation(self, reservation_id):
-        """Madde 4: Update/Delete işlemi (Status'u iptal yapar)"""
         try:
             cur = self.conn.cursor()
             cur.execute("UPDATE reservations SET status = 'cancelled' WHERE reservation_id = %s", (reservation_id,))
@@ -116,44 +110,45 @@ class Database:
             cur.close()
             return True
         except Exception as e:
+            self.conn.rollback()
             print(f"İptal Hatası: {e}")
             return False
 
-    # --- 4. ÖNERİ SİSTEMİ (Madde 11: Cursor/Record Kullanımı) ---
+    # --- 4. ÖNERİ SİSTEMİ ---
     def get_suggestion(self, room_id, start_time, duration):
         try:
             cur = self.conn.cursor()
-            # func_suggest_table fonksiyonunu çağırır
             cur.execute("SELECT func_suggest_table(%s, %s, %s)", (room_id, start_time, duration))
-            result = cur.fetchone()[0] # Tek bir metin döner
+            result = cur.fetchone()
             cur.close()
-            return result
+            
+            if result:
+                return result[0]
+            else:
+                return "Öneri bulunamadı."
         except Exception as e:
-            return f"Öneri Hatası: {e}"
+            print(f"Öneri Hatası: {e}")
+            import traceback
+            traceback.print_exc()
+            return f"Öneri Hatası: {str(e)}"
 
-    # --- 5. İSTATİSTİKLER (Madde 10 & 11: Aggregate ve Fonksiyon) ---
+    # --- 5. İSTATİSTİKLER ---
     def get_user_stats(self, user_id, period):
-        """
-        period: '1 week', '1 month', 'all'
-        func_user_stats SQL fonksiyonunu kullanır.
-        """
         try:
             cur = self.conn.cursor()
             cur.execute("SELECT * FROM func_user_stats(%s, %s)", (user_id, period))
             result = cur.fetchone()
             cur.close()
-            # Dönüş: (Interval Süre, Toplam Oturum Sayısı)
+            print(f"İstatistik sonucu: {result}")  # Debug için
             return result
         except Exception as e:
             print(f"İstatistik Hatası: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    # --- 6. EXCEPT SORGUSU (Madde 9: Küme İşlemleri) ---
+    # --- 6. EXCEPT SORGUSU ---
     def get_available_tables_list(self, room_id):
-        """
-        Hızlı seçim menüsü için sadece boş masaları getirir.
-        EXCEPT kullanımı buradadır.
-        """
         try:
             cur = self.conn.cursor()
             query = """
@@ -163,20 +158,20 @@ class Database:
                 FROM reservations r
                 JOIN study_tables st ON r.table_id = st.table_id
                 WHERE r.status = 'active' 
+                AND st.room_id = %s
                 AND (NOW() BETWEEN r.start_time AND r.end_time)
                 ORDER BY table_number;
             """
-            cur.execute(query, (room_id,))
+            cur.execute(query, (room_id, room_id))
             results = cur.fetchall()
             cur.close()
-            return [row[0] for row in results] # Liste olarak döner: [1, 3, 5]
+            return [row[0] for row in results]
         except Exception as e:
             print(f"Except Sorgu Hatası: {e}")
             return []
 
-    # --- 7. ADMIN VE KULLANICI LİSTELERİ (Madde 6: View Kullanımı) ---
+    # --- 7. LİSTELEME FONKSİYONLARI ---
     def get_my_reservations(self, user_id):
-        """Öğrencinin kendi geçmişini listeler"""
         try:
             cur = self.conn.cursor()
             query = """
@@ -196,7 +191,6 @@ class Database:
             return []
 
     def get_all_reservations_admin(self):
-        """Admin için VIEW kullanımı"""
         try:
             cur = self.conn.cursor()
             cur.execute("SELECT * FROM view_all_reservations ORDER BY start_time DESC")
@@ -205,4 +199,11 @@ class Database:
             return results
         except Exception as e:
             print(f"View Hatası: {e}")
+            import traceback
+            traceback.print_exc()
             return []
+    
+    def __del__(self):
+        """Bağlantıyı düzgün kapatmak için"""
+        if self.conn:
+            self.conn.close()

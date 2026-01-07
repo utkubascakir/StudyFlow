@@ -68,6 +68,8 @@ BEFORE INSERT ON users
 FOR EACH ROW
 EXECUTE FUNCTION trg_check_password_func();
 
+
+
 CREATE OR REPLACE FUNCTION func_user_stats(p_user_id INT, p_period_text VARCHAR) 
 RETURNS TABLE(total_duration INTERVAL, total_sessions INT) AS $$
 DECLARE
