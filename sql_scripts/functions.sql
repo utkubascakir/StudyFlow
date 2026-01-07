@@ -225,3 +225,27 @@ EXCEPTION
         RETURN 'HATA: ' || SQLERRM;
 END;
 $$ LANGUAGE plpgsql;
+
+
+
+-- GÜNLÜK LİMİT KONTROLÜ İÇİN FONKSİYON
+CREATE OR REPLACE FUNCTION check_daily_limit_func() RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM reservations 
+        WHERE user_id = NEW.user_id 
+          AND status = 'active'
+          AND DATE(start_time) = DATE(NEW.start_time) -- Aynı gün kontrolü
+          AND reservation_id != NEW.reservation_id -- Güncelleme durumunda kendini saymasın
+    ) THEN
+        RAISE EXCEPTION 'GÜNLÜK LİMİT: Günde sadece 1 kez rezervasyon yapabilirsiniz!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- TRIGGER TANIMI
+CREATE TRIGGER trg_check_daily_limit
+BEFORE INSERT ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION check_daily_limit_func();
