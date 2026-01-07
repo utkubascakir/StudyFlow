@@ -29,6 +29,45 @@ $$ LANGUAGE plpgsql;
 
 
 
+-- 1. KAYIT OLMA FONKSİYONU
+CREATE OR REPLACE FUNCTION func_register_user(
+    p_first_name VARCHAR,
+    p_last_name VARCHAR,
+    p_email VARCHAR,
+    p_password VARCHAR
+) RETURNS TEXT AS $$
+BEGIN
+    -- E-posta kontrolü: Zaten var mı?
+    IF EXISTS (SELECT 1 FROM users WHERE email = p_email) THEN
+        RETURN 'HATA: Bu e-posta adresi zaten kayıtlı!';
+    END IF;
+
+    -- Yeni kayıt ekle (Varsayılan rol: student)
+    INSERT INTO users (first_name, last_name, email, user_password, user_role)
+    VALUES (p_first_name, p_last_name, p_email, p_password, 'student');
+
+    RETURN 'SUCCESS';
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+-- 2. TRIGGER: ŞİFRE UZUNLUK KONTROLÜ (Proje Madde 12 - İkinci Trigger)
+-- Kullanıcı 4 karakterden kısa şifre belirleyemesin.
+CREATE OR REPLACE FUNCTION trg_check_password_func() RETURNS TRIGGER AS $$
+BEGIN
+    IF LENGTH(NEW.user_password) < 4 THEN
+        RAISE EXCEPTION 'Şifre en az 4 karakter olmalıdır!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_validate_password
+BEFORE INSERT ON users
+FOR EACH ROW
+EXECUTE FUNCTION trg_check_password_func();
+
 CREATE OR REPLACE FUNCTION func_user_stats(p_user_id INT, p_period_text VARCHAR) 
 RETURNS TABLE(total_duration INTERVAL, total_sessions INT) AS $$
 DECLARE

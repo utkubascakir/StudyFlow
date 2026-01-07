@@ -33,6 +33,25 @@ class Database:
         except Exception as e:
             print(f"Login Hatası: {e}")
             return None
+        
+    # --- YENİ EKLENECEK: KAYIT FONKSİYONU ---
+    def register_user(self, first_name, last_name, email, password):
+        try:
+            cur = self.conn.cursor()
+            # Trigger hatasını yakalamak için SQL fonksiyonunu çağırıyoruz
+            cur.execute("SELECT func_register_user(%s, %s, %s, %s)", (first_name, last_name, email, password))
+            result = cur.fetchone()[0] # 'SUCCESS' veya Hata mesajı döner
+            
+            self.conn.commit() # Değişikliği kaydet
+            cur.close()
+            return result
+        except Exception as e:
+            self.conn.rollback()
+            # Trigger hatasını temizle
+            error_msg = str(e)
+            if "Şifre en az 4 karakter" in error_msg:
+                return "HATA: Şifre çok kısa! (Min 4 karakter)"
+            return f"Kayıt Hatası: {error_msg}"
 
     # --- 2. ODA VE MASA DURUMLARI (Grid View İçin) ---
     def get_rooms(self):
