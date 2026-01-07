@@ -6,7 +6,7 @@ class Database:
         self.db_config = {
             "dbname": "StudyFlow",
             "user": "postgres",
-            "password": "123",  
+            "password": "1234",  
             "host": "localhost",
             "port": "5432"
         }
@@ -16,7 +16,7 @@ class Database:
     def connect(self):
         try:
             self.conn = psycopg2.connect(**self.db_config)
-            self.conn.autocommit = True  # ÖNEMLİ: Transaction hatalarını önler
+            self.conn.autocommit = True
             print("Veritabanı bağlantısı başarılı!")
         except Exception as e:
             print(f"Bağlantı Hatası: {e}")
@@ -76,11 +76,11 @@ class Database:
             return []
 
     def get_room_status(self, room_id, check_time):
+        """Belirli bir odadaki masaların belirli bir zamandaki durumunu getirir"""
         try:
             self._reconnect_if_needed()
             cur = self.conn.cursor()
-            # Debug için yazdırıyoruz
-            print(f"DEBUG SQL: Oda {room_id} için durum sorgulanıyor...") 
+            print(f"DEBUG SQL: Oda {room_id} için durum sorgulanıyor, zaman: {check_time}") 
             
             cur.execute("SELECT * FROM func_get_room_status(%s, %s)", (room_id, check_time))
             results = cur.fetchall()
@@ -89,6 +89,8 @@ class Database:
             return results
         except Exception as e:
             print(f"✗ Durum Sorgu Hatası: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     # --- 3. REZERVASYON İŞLEMLERİ ---
@@ -96,14 +98,24 @@ class Database:
         try:
             self._reconnect_if_needed()
             cur = self.conn.cursor()
-            # Artık direkt INSERT değil, SQL fonksiyonunu çağırıyoruz
+            print(f"DEBUG: Rezervasyon oluşturuluyor - User: {user_id}, Table: {table_id}, Start: {start_time}, End: {end_time}")
             cur.execute("SELECT func_create_reservation(%s, %s, %s, %s)", (user_id, table_id, start_time, end_time))
-            result = cur.fetchone()[0] # 'SUCCESS' veya Hata mesajı döner
+            result = cur.fetchone()[0]
             cur.close()
+            print(f"DEBUG: Rezervasyon sonucu: {result}")
             return result
         except Exception as e:
-            print(f"✗ Rezervasyon Hatası: {e}")
-            return f"Sistem Hatası: {str(e)}"
+            error_msg = str(e)
+            print(f"✗ Rezervasyon Hatası: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            
+            # Hata mesajlarını düzgün döndür
+            if "ÇAKIŞMA VAR" in error_msg or "zaten dolu" in error_msg:
+                return "HATA: Bu saat aralığında masa zaten dolu!"
+            elif "GÜNLÜK LİMİT" in error_msg or "sadece 1 kez" in error_msg:
+                return "HATA: Günde sadece 1 kez rezervasyon yapabilirsiniz!"
+            return f"Sistem Hatası: {error_msg}"
 
     def cancel_reservation(self, reservation_id):
         try:
@@ -117,12 +129,17 @@ class Database:
             return False
 
     # --- 4. ÖNERİ SİSTEMİ ---
-    def get_suggestion(self, room_id, start_time, duration):
+    def get_suggestion(self, room_id, start_time, end_time):
+        """Başlangıç ve bitiş zamanı arasında uygun masa önerir"""
         try:
             self._reconnect_if_needed()
             cur = self.conn.cursor()
-            print(f"→ Öneri sorgusu: Oda={room_id}, Başlangıç={start_time}, Süre={duration}h")
-            cur.execute("SELECT func_suggest_table(%s, %s, %s)", (room_id, start_time, duration))
+            
+            # Süreyi hesapla (saat cinsinden)
+            duration_hours = int((end_time - start_time).total_seconds() / 3600)
+            
+            print(f"→ Öneri sorgusu: Oda={room_id}, Başlangıç={start_time}, Süre={duration_hours}h")
+            cur.execute("SELECT func_suggest_table(%s, %s, %s)", (room_id, start_time, duration_hours))
             result = cur.fetchone()
             cur.close()
             
@@ -154,7 +171,8 @@ class Database:
             return None
 
     # --- 6. EXCEPT SORGUSU ---
-    def get_available_tables_list(self, room_id):
+    def get_available_tables_for_timerange(self, room_id, start_time, end_time):
+        """Belirli zaman aralığında müsait masaları EXCEPT ile bulur"""
         try:
             self._reconnect_if_needed()
             cur = self.conn.cursor()
@@ -166,17 +184,19 @@ class Database:
                 JOIN study_tables st ON r.table_id = st.table_id
                 WHERE r.status = 'active' 
                 AND st.room_id = %s
-                AND (NOW() BETWEEN r.start_time AND r.end_time)
+                AND (r.start_time < %s AND r.end_time > %s)
                 ORDER BY table_number;
             """
-            cur.execute(query, (room_id, room_id))
+            cur.execute(query, (room_id, room_id, end_time, start_time))
             results = cur.fetchall()
             cur.close()
             available = [row[0] for row in results]
-            print(f"✓ Boş masalar (Oda {room_id}): {available}")
+            print(f"✓ Boş masalar (Oda {room_id}, {start_time} - {end_time}): {available}")
             return available
         except Exception as e:
             print(f"✗ Except Sorgu Hatası: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     # --- 7. LİSTELEME FONKSİYONLARI ---

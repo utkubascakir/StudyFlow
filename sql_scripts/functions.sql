@@ -249,3 +249,58 @@ CREATE TRIGGER trg_check_daily_limit
 BEFORE INSERT ON reservations
 FOR EACH ROW
 EXECUTE FUNCTION check_daily_limit_func();
+
+--***********************************************************
+--***********************************************************
+
+DROP TRIGGER IF EXISTS trg_check_daily_limit ON reservations;
+DROP FUNCTION IF EXISTS check_daily_limit_func();
+
+
+CREATE OR REPLACE FUNCTION check_daily_limit_func() RETURNS TRIGGER AS $$
+BEGIN
+
+    IF EXISTS (
+        SELECT 1 FROM reservations 
+        WHERE user_id = NEW.user_id 
+          AND status = 'active'
+          AND DATE(start_time) = DATE(NEW.start_time) 
+          AND reservation_id != COALESCE(NEW.reservation_id, -1)
+    ) THEN
+        RAISE EXCEPTION 'GÜNLÜK LİMİT: Günde sadece 1 kez rezervasyon yapabilirsiniz!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER trg_check_daily_limit
+BEFORE INSERT OR UPDATE ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION check_daily_limit_func();
+
+
+
+DROP TRIGGER IF EXISTS trg_prevent_double_booking ON reservations;
+DROP FUNCTION IF EXISTS check_overlap_func();
+
+CREATE OR REPLACE FUNCTION check_overlap_func() RETURNS TRIGGER AS $$
+BEGIN
+
+    IF EXISTS (
+        SELECT 1 FROM reservations
+        WHERE table_id = NEW.table_id
+          AND status = 'active'
+          AND reservation_id != COALESCE(NEW.reservation_id, -1)  
+          AND (NEW.start_time < end_time AND NEW.end_time > start_time) 
+    ) THEN
+        RAISE EXCEPTION 'ÇAKIŞMA VAR: Bu saat aralığında masa zaten dolu!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_prevent_double_booking
+BEFORE INSERT OR UPDATE ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION check_overlap_func();
