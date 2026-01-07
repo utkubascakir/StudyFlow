@@ -71,3 +71,93 @@ BEGIN
     RETURN QUERY SELECT v_total_time, v_count;
 END;
 $$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION func_get_room_status(p_room_id INT, p_check_time TIMESTAMP)
+RETURNS TABLE(
+    table_id INT, 
+    table_number INT, 
+    status TEXT, 
+    until_time TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        st.table_id,
+        st.table_number,
+        CASE 
+            WHEN r.reservation_id IS NOT NULL THEN 'DOLU'
+            ELSE 'BOŞ'
+        END AS status,
+        r.end_time AS until_time
+    FROM study_tables st
+    LEFT JOIN reservations r ON st.table_id = r.table_id 
+        AND r.status = 'active'
+        AND (p_check_time >= r.start_time AND p_check_time < r.end_time)
+    WHERE st.room_id = p_room_id
+    ORDER BY st.table_number;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION func_suggest_table(p_room_id INT, p_start_time TIMESTAMP, p_duration_hours INT) 
+RETURNS TEXT AS $$
+DECLARE
+    -- Madde 11: RECORD ve CURSOR Tanımı
+    rec_table RECORD;
+    cur_tables CURSOR FOR SELECT table_id, table_number FROM study_tables WHERE room_id = p_room_id ORDER BY table_number;
+    
+    v_end_time TIMESTAMP;
+    v_collision_count INT;
+BEGIN
+    v_end_time := p_start_time + (p_duration_hours || ' hours')::INTERVAL;
+
+    OPEN cur_tables; -- Cursor'ı aç
+    LOOP
+        FETCH cur_tables INTO rec_table; -- Satır satır oku
+        EXIT WHEN NOT FOUND; -- Kayıt bitince çık
+
+        -- Bu masa için o saat aralığında çakışan rezervasyon var mı?
+        SELECT COUNT(*) INTO v_collision_count
+        FROM reservations
+        WHERE table_id = rec_table.table_id
+          AND status = 'active'
+          AND (start_time < v_end_time AND end_time > p_start_time);
+
+        -- Çakışma yoksa (0 ise) bu masayı öner ve döngüden çık
+        IF v_collision_count = 0 THEN
+            CLOSE cur_tables;
+            RETURN 'Öneri: Masa ' || rec_table.table_number;
+        END IF;
+
+    END LOOP;
+    
+    CLOSE cur_tables;
+    RETURN 'Maalesef, bu saatte uygun masa yok.';
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+-- Trigger Fonksiyonu
+CREATE OR REPLACE FUNCTION check_overlap_func() RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM reservations
+        WHERE table_id = NEW.table_id
+          AND status = 'active'
+          AND (NEW.start_time < end_time AND NEW.end_time > start_time)
+    ) THEN
+        RAISE EXCEPTION 'ÇAKIŞMA VAR: Bu saat aralığında masa zaten dolu!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger Tanımı
+CREATE TRIGGER trg_prevent_double_booking
+BEFORE INSERT ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION check_overlap_func();
