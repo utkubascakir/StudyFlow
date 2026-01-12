@@ -1,17 +1,3 @@
-CREATE OR REPLACE VIEW view_all_reservations AS
-SELECT 
-    r.reservation_id,
-    u.first_name || ' ' || u.last_name AS full_name,
-    sr.room_name,
-    st.table_number,
-    r.start_time,
-    r.end_time,
-    r.status
-FROM reservations r
-JOIN users u ON r.user_id = u.user_id
-JOIN study_tables st ON r.table_id = st.table_id
-JOIN study_rooms sr ON st.room_id = sr.room_id;
-
 
 
 -- Login Fonksiyonu
@@ -182,28 +168,6 @@ $$ LANGUAGE plpgsql;
 
 
 
--- Trigger Fonksiyonu
-CREATE OR REPLACE FUNCTION check_overlap_func() RETURNS TRIGGER AS $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM reservations
-        WHERE table_id = NEW.table_id
-          AND status = 'active'
-          AND (NEW.start_time < end_time AND NEW.end_time > start_time)
-    ) THEN
-        RAISE EXCEPTION 'ÇAKIŞMA VAR: Bu saat aralığında masa zaten dolu!';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Trigger Tanımı
-CREATE TRIGGER trg_prevent_double_booking
-BEFORE INSERT ON reservations
-FOR EACH ROW
-EXECUTE FUNCTION check_overlap_func();
-
-
 
 -- Mevcut trigger zaten var, bu fonksiyon sadece sarmalayıcı (wrapper) olacak.
 CREATE OR REPLACE FUNCTION func_create_reservation(
@@ -228,33 +192,12 @@ $$ LANGUAGE plpgsql;
 
 
 
--- GÜNLÜK LİMİT KONTROLÜ İÇİN FONKSİYON
-CREATE OR REPLACE FUNCTION check_daily_limit_func() RETURNS TRIGGER AS $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM reservations 
-        WHERE user_id = NEW.user_id 
-          AND status = 'active'
-          AND DATE(start_time) = DATE(NEW.start_time) -- Aynı gün kontrolü
-          AND reservation_id != NEW.reservation_id -- Güncelleme durumunda kendini saymasın
-    ) THEN
-        RAISE EXCEPTION 'GÜNLÜK LİMİT: Günde sadece 1 kez rezervasyon yapabilirsiniz!';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
--- TRIGGER TANIMI
-CREATE TRIGGER trg_check_daily_limit
-BEFORE INSERT ON reservations
-FOR EACH ROW
-EXECUTE FUNCTION check_daily_limit_func();
+
 
 --***********************************************************
 --***********************************************************
 
-DROP TRIGGER IF EXISTS trg_check_daily_limit ON reservations;
-DROP FUNCTION IF EXISTS check_daily_limit_func();
 
 
 CREATE OR REPLACE FUNCTION check_daily_limit_func() RETURNS TRIGGER AS $$
@@ -281,8 +224,6 @@ EXECUTE FUNCTION check_daily_limit_func();
 
 
 
-DROP TRIGGER IF EXISTS trg_prevent_double_booking ON reservations;
-DROP FUNCTION IF EXISTS check_overlap_func();
 
 CREATE OR REPLACE FUNCTION check_overlap_func() RETURNS TRIGGER AS $$
 BEGIN
@@ -304,3 +245,143 @@ CREATE TRIGGER trg_prevent_double_booking
 BEFORE INSERT OR UPDATE ON reservations
 FOR EACH ROW
 EXECUTE FUNCTION check_overlap_func();
+
+--*********************************************************************
+-- 1. Function to auto-complete past reservations
+CREATE OR REPLACE FUNCTION complete_past_reservations() 
+RETURNS INTEGER AS $$
+DECLARE
+    updated_count INTEGER;
+BEGIN
+    -- Update all active reservations where end_time has passed
+    UPDATE reservations 
+    SET status = 'completed'
+    WHERE status = 'active' 
+      AND end_time < NOW();
+    
+    -- Get number of rows updated
+    GET DIAGNOSTICS updated_count = ROW_COUNT;
+    
+    RETURN updated_count;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- 2. Smart View with dynamic status calculation
+CREATE OR REPLACE VIEW reservations_with_status AS
+SELECT 
+    reservation_id,
+    user_id,
+    table_id,
+    start_time,
+    end_time,
+    created_at,
+    -- Dynamic status: if end_time passed, show 'completed' even if DB says 'active'
+    CASE 
+        WHEN status = 'cancelled' THEN 'cancelled'
+        WHEN end_time < NOW() THEN 'completed'
+        ELSE 'active'
+    END AS status,
+    status AS original_status  -- Keep original for reference
+FROM reservations;
+
+
+
+CREATE OR REPLACE VIEW view_all_reservations AS
+SELECT 
+    r.reservation_id,
+    u.first_name || ' ' || u.last_name AS full_name,
+    sr.room_name,
+    st.table_number,
+    r.start_time,
+    r.end_time,
+    r.status  -- Now uses dynamic status from reservations_with_status
+FROM reservations_with_status r  -- Changed from 'reservations' to 'reservations_with_status'
+JOIN users u ON r.user_id = u.user_id
+JOIN study_tables st ON r.table_id = st.table_id
+JOIN study_rooms sr ON st.room_id = sr.room_id
+WHERE u.user_role='student';
+
+
+--**************************
+CREATE INDEX idx_reservations_user_id ON reservations(user_id);
+CREATE INDEX idx_reservations_table_id ON reservations(table_id);
+
+
+
+
+DROP USER IF EXISTS app_student;
+DROP USER IF EXISTS app_admin;
+
+-- Create student user (for regular students)
+CREATE USER app_student WITH PASSWORD 'student_pass_2025';
+
+-- Create admin user (for administrators)
+CREATE USER app_admin WITH PASSWORD 'admin_pass_2025';
+
+
+-- =====================================================
+-- 2. GRANT PRIVILEGES FOR STUDENT USER (app_student)
+-- =====================================================
+
+
+-- Schema usage
+GRANT USAGE ON SCHEMA public TO app_student;
+
+-- TABLES: Students need to read/write specific tables
+
+-- users table: Can INSERT (register), SELECT (login), but NOT UPDATE/DELETE
+GRANT SELECT, INSERT ON users TO app_student;
+
+-- study_rooms table: Only SELECT (view available rooms)
+GRANT SELECT ON study_rooms TO app_student;
+
+-- study_tables table: Only SELECT (view available tables)
+GRANT SELECT ON study_tables TO app_student;
+
+-- reservations table: Can INSERT, SELECT, UPDATE (for their own reservations)
+GRANT SELECT, INSERT, UPDATE ON reservations TO app_student;
+
+-- SEQUENCES: Need to use sequences for auto-increment
+GRANT USAGE, SELECT ON SEQUENCE seq_user_id TO app_student;
+GRANT USAGE, SELECT ON SEQUENCE reservations_reservation_id_seq TO app_student;
+
+-- VIEWS: Students can view these
+GRANT SELECT ON view_all_reservations TO app_student;
+GRANT SELECT ON reservations_with_status TO app_student;
+
+-- FUNCTIONS: Students need to execute these functions
+GRANT EXECUTE ON FUNCTION func_login(VARCHAR, VARCHAR) TO app_student;
+GRANT EXECUTE ON FUNCTION func_register_user(VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO app_student;
+GRANT EXECUTE ON FUNCTION func_user_stats(INT, VARCHAR) TO app_student;
+GRANT EXECUTE ON FUNCTION func_get_room_status(INT, TIMESTAMP) TO app_student;
+GRANT EXECUTE ON FUNCTION func_suggest_table(INT, TIMESTAMP, INT) TO app_student;
+GRANT EXECUTE ON FUNCTION func_create_reservation(INT, INT, TIMESTAMP, TIMESTAMP) TO app_student;
+GRANT EXECUTE ON FUNCTION complete_past_reservations() TO app_student;
+
+
+-- =====================================================
+-- 3. GRANT PRIVILEGES FOR ADMIN USER (app_admin)
+-- =====================================================
+
+-- Schema usage
+GRANT USAGE ON SCHEMA public TO app_admin;
+
+-- TABLES: Admins have full access to all tables
+GRANT SELECT, INSERT, UPDATE, DELETE ON users TO app_admin;
+GRANT SELECT, INSERT, UPDATE, DELETE ON study_rooms TO app_admin;
+GRANT SELECT, INSERT, UPDATE, DELETE ON study_tables TO app_admin;
+GRANT SELECT, INSERT, UPDATE, DELETE ON reservations TO app_admin;
+
+-- SEQUENCES: Full access
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE seq_user_id TO app_admin;
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE reservations_reservation_id_seq TO app_admin;
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE study_rooms_room_id_seq TO app_admin;
+GRANT USAGE, SELECT, UPDATE ON SEQUENCE study_tables_table_id_seq TO app_admin;
+
+-- VIEWS: Full access
+GRANT SELECT ON view_all_reservations TO app_admin;
+GRANT SELECT ON reservations_with_status TO app_admin;
+
+-- FUNCTIONS: Execute all functions
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO app_admin;

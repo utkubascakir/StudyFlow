@@ -38,7 +38,7 @@ CREATE TABLE study_tables (
 -- 4. TABLO: REZERVASYONLAR (RESERVATIONS)
 CREATE TABLE reservations (
     reservation_id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(user_id) ON DELETE SET NULL,
+    user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
     table_id INT REFERENCES study_tables(table_id) ON DELETE CASCADE,
     start_time TIMESTAMP NOT NULL,
     end_time TIMESTAMP NOT NULL,
