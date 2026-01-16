@@ -219,7 +219,6 @@ def main(page: ft.Page):
                 pass_input,
                 ft.FilledButton("Giriş Yap", width=300, height=45, on_click=handle_login, style=ft.ButtonStyle(bgcolor=primary_color, color="white")),
                 ft.TextButton("Hesabın yok mu? Kayıt Ol", on_click=lambda e: load_register_page()),
-                ft.Text("Admin: admin@studyflow.com / 1234", size=12, color=ft.Colors.GREY_600)
             ], alignment="center", horizontal_alignment="center"),
             width=400, height=550, bgcolor=card_bg, border_radius=20, padding=40,
             shadow=ft.BoxShadow(spread_radius=1, blur_radius=15, color=ft.Colors.BLACK)

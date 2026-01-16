@@ -36,7 +36,7 @@ class Database:
             self.db_config = {
                 **base_config,
                 "user": "postgres",
-                "password": "1234"
+                "password": "123"
             }
 
     def connect(self):
