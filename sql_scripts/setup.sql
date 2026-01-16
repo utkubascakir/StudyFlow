@@ -2,10 +2,12 @@
 CREATE SEQUENCE seq_user_id START 10000 INCREMENT 1;
 
 
--- 2. CUSTOM TYPES
+-- 2. Record kullanımı içn tanımı
 CREATE TYPE table_record AS (
     table_id INT,
-    table_number INT
+    table_number INT,
+    status TEXT,
+    until_time TIMESTAMP
 );
 
 
@@ -229,23 +231,34 @@ RETURNS TABLE(
     status TEXT, 
     until_time TIMESTAMP
 ) AS $$
+DECLARE
+    cur_tables CURSOR FOR 
+        SELECT 
+            st.table_id,
+            st.table_number,
+            CASE 
+                WHEN r.reservation_id IS NOT NULL THEN 'DOLU'
+                ELSE 'BOŞ'
+            END AS status,
+            r.end_time AS until_time
+        FROM study_tables st
+        LEFT JOIN reservations r 
+            ON st.table_id = r.table_id 
+            AND r.status = 'active'
+            AND (p_check_time >= r.start_time AND p_check_time < r.end_time)
+        WHERE st.room_id = p_room_id
+        ORDER BY st.table_number;
+    v_row table_record;
 BEGIN
-    RETURN QUERY
-    SELECT 
-        st.table_id,
-        st.table_number,
-        CASE 
-            WHEN r.reservation_id IS NOT NULL THEN 'DOLU'
-            ELSE 'BOŞ'
-        END AS status,
-        r.end_time AS until_time
-    FROM study_tables st
-    LEFT JOIN reservations r 
-        ON st.table_id = r.table_id 
-        AND r.status = 'active'
-        AND (p_check_time >= r.start_time AND p_check_time < r.end_time)
-    WHERE st.room_id = p_room_id
-    ORDER BY st.table_number;
+
+    FOR v_row IN cur_tables LOOP
+        func_get_room_status.table_id     := v_row.table_id;
+        func_get_room_status.table_number := v_row.table_number;
+        func_get_room_status.status       := v_row.status;
+        func_get_room_status.until_time   := v_row.until_time;
+        
+        RETURN NEXT;
+    END LOOP;
 END;
 $$ LANGUAGE plpgsql;
 

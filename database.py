@@ -455,6 +455,7 @@ class Database:
                     })
                     continue
                 
+                #Maskenin mevcut konumu için odaların durumunu al
                 available_tables = self.get_available_tables_for_timerange(
                     room_id, start_time, end_time
                 )
