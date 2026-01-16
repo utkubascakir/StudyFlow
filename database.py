@@ -251,33 +251,6 @@ class Database:
             traceback.print_exc()
             return f"HATA: {str(e)}"
 
-    # Öneri
-    def get_suggestion(self, room_id, start_time, end_time):
-        try:
-            self._reconnect_if_needed()
-            cur = self.conn.cursor()
-            
-            duration_hours = int((end_time - start_time).total_seconds() / 3600)
-            
-            
-            cur.execute(
-                "SELECT func_suggest_table(%s, %s, %s)",
-                (room_id, start_time, duration_hours)
-            )
-            result = cur.fetchone()
-            cur.close()
-            
-            if result:
-                return result[0]
-            else:
-                return "Öneri bulunamadı."
-        except Exception as e:
-            print(f"Öneri Hatası: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"Öneri alınamadı: {str(e)}"
-
-
     #Bir kişinin reservationlarını getir
     def get_my_reservations(self, user_id):
         try:
@@ -449,3 +422,75 @@ class Database:
             import traceback
             traceback.print_exc()
             return f"HATA: {str(e)}"
+    
+    #Öneri fonksiyonu
+    def find_best_time_window(self, room_id, date_str, duration_hours):
+        try:
+            self._reconnect_if_needed()
+            
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            now = datetime.now()
+            
+            results = []
+            best_start_hour = None
+            best_end_hour = None
+            max_available = -1
+
+            #Çalışılmak istenen saat miktarını 9-22 arasında maske gibi gezdir.
+            #Her bir gezinmede odanın o saatteki durumunu al
+            #Bu değerlere göre önerilerde bulun
+            for start_hour in range(9, 23 - duration_hours):
+                end_hour = start_hour + duration_hours
+                
+                start_time = date_obj.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+                end_time = date_obj.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+                
+                if start_time < now:
+                    results.append({
+                        'start_hour': start_hour,
+                        'end_hour': end_hour,
+                        'available_count': 0,
+                        'status': 'past',
+                        'message': f"{start_hour}:00 - {end_hour}:00 (Geçmiş zaman)"
+                    })
+                    continue
+                
+                available_tables = self.get_available_tables_for_timerange(
+                    room_id, start_time, end_time
+                )
+                
+                available_count = len(available_tables)
+                
+                if available_count == 0:
+                    status = 'full'
+                    message = f"{start_hour}:00 - {end_hour}:00 (Uygun masa yok)"
+                else:
+                    status = 'available'
+                    message = f"{start_hour}:00 - {end_hour}:00 ({available_count} masa müsait)"
+                
+                results.append({
+                    'start_hour': start_hour,
+                    'end_hour': end_hour,
+                    'available_count': available_count,
+                    'available_tables': available_tables,
+                    'status': status,
+                    'message': message
+                })
+                
+                if available_count > max_available:
+                    max_available = available_count
+                    best_start_hour = start_hour
+                    best_end_hour = end_hour
+            
+            return {
+                'best_start_hour': best_start_hour,
+                'best_end_hour': best_end_hour,
+                'max_available': max_available,
+                'all_windows': results
+            }
+            
+        except Exception as e:
+            print(f"En iyi zaman bulma hatası: {e}")
+            import traceback
+            traceback.print_exc()
+            return None

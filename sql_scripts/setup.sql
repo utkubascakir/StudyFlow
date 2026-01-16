@@ -249,41 +249,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Öneri Fonksiyonu
-CREATE OR REPLACE FUNCTION func_suggest_table(
-    p_room_id INT, 
-    p_start_time TIMESTAMP, 
-    p_duration_hours INT
-) 
-RETURNS TEXT AS $$
-DECLARE
-    rec_table table_record;
-    cur_tables CURSOR FOR 
-        SELECT table_id, table_number 
-        FROM study_tables 
-        WHERE room_id = p_room_id 
-        ORDER BY table_number;
-    v_end_time TIMESTAMP;
-    v_collision_count INT;
-BEGIN
-    v_end_time := p_start_time + (p_duration_hours || ' hours')::INTERVAL;
-
-    FOR rec_table IN cur_tables LOOP
-        SELECT COUNT(*) INTO v_collision_count
-        FROM reservations
-        WHERE table_id = rec_table.table_id
-          AND status = 'active'
-          AND (start_time < v_end_time AND end_time > p_start_time);
-
-        -- ilk uygun masayı döndür
-        IF v_collision_count = 0 THEN
-            RETURN 'Öneri: Masa ' || rec_table.table_number;
-        END IF;
-    END LOOP;
-    
-    RETURN 'Maalesef, bu saatte uygun masa yok.';
-END;
-$$ LANGUAGE plpgsql;
 
 -- Create Reservation
 CREATE OR REPLACE FUNCTION func_create_reservation(
@@ -384,7 +349,6 @@ GRANT EXECUTE ON FUNCTION func_login(VARCHAR, VARCHAR) TO app_student;
 GRANT EXECUTE ON FUNCTION func_register_user(VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO app_student;
 GRANT EXECUTE ON FUNCTION func_user_stats(INT, VARCHAR) TO app_student;
 GRANT EXECUTE ON FUNCTION func_get_room_status(INT, TIMESTAMP) TO app_student;
-GRANT EXECUTE ON FUNCTION func_suggest_table(INT, TIMESTAMP, INT) TO app_student;
 GRANT EXECUTE ON FUNCTION func_create_reservation(INT, INT, TIMESTAMP, TIMESTAMP) TO app_student;
 GRANT EXECUTE ON FUNCTION complete_past_reservations() TO app_student;
 

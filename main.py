@@ -573,42 +573,250 @@ def main(page: ft.Page):
                 confirm_bar.visible = True
                 page.update()
 
+            #Öneri al
             def get_suggestion(e):
                 try:
                     room_id = int(room_dropdown.value)
                     date_str = date_picker.value
                     start_h = int(start_hour.value)
                     end_h = int(end_hour.value)
-
-                    # Geçmiş zaman kontrolü
-                    if is_time_in_past(date_str, start_h):
-                        show_message('Geçmiş bir zaman için öneri alınamaz!', ft.Colors.RED)
+                    duration = end_h - start_h
+                    
+                    
+                    if duration <= 0:
+                        show_message('Geçerli bir süre belirtin!', ft.Colors.RED)
                         return
-
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    start_time = date_obj.replace(hour=start_h, minute=0, second=0, microsecond=0)
-                    end_time = date_obj.replace(hour=end_h, minute=0, second=0, microsecond=0)
-
-                    msg = current_db[0].get_suggestion(room_id, start_time, end_time)
-
-                    page.snack_bar = ft.SnackBar(content=ft.Text(str(msg)), bgcolor=ft.Colors.CYAN)
-                    page.snack_bar.open = True
+                    
+                    if duration > 13:
+                        show_message('Maksimum süre 13 saat olabilir!', ft.Colors.RED)
+                        return
+                    
+                    #çalışılmak istenen saat miktarı kadar tüm olasılıkları yoğunluğa göre belirle ve yazdır
+                    result = current_db[0].find_best_time_window(room_id, date_str, duration)
+                    
+                    if not result:
+                        show_message('Öneri alınamadı!', ft.Colors.RED)
+                        return
+                    
+                    best_start = result['best_start_hour']
+                    best_end = result['best_end_hour']
+                    max_avail = result['max_available']
+                    all_windows = result['all_windows']
+                    
+                    if best_start is None:
+                        show_message('Üzgünüz, seçilen tarihte uygun zaman bulunamadı!', ft.Colors.RED)
+                        return
+                    suggestion_cards = []
+                    
+                    for window in all_windows:
+                        s_hour = window['start_hour']
+                        e_hour = window['end_hour']
+                        avail_count = window['available_count']
+                        status = window['status']
+                        
+                        if status == 'past':
+                            bg_color = ft.Colors.GREY_800
+                            icon = ft.Icons.HISTORY
+                            icon_color = ft.Colors.GREY_400
+                            border_color = ft.Colors.GREY_700
+                            is_disabled = True
+                        elif status == 'full':
+                            bg_color = ft.Colors.RED_900
+                            icon = ft.Icons.BLOCK
+                            icon_color = ft.Colors.RED_300
+                            border_color = ft.Colors.RED_800
+                            is_disabled = True
+                        elif s_hour == best_start and e_hour == best_end:
+                            bg_color = ft.Colors.GREEN_900
+                            icon = ft.Icons.STAR
+                            icon_color = ft.Colors.YELLOW_400
+                            border_color = ft.Colors.GREEN_400
+                            is_disabled = False
+                        elif avail_count >= max_avail * 0.7:
+                            bg_color = ft.Colors.GREEN_800
+                            icon = ft.Icons.CHECK_CIRCLE
+                            icon_color = ft.Colors.GREEN_300
+                            border_color = ft.Colors.GREEN_700
+                            is_disabled = False
+                        elif avail_count >= max_avail * 0.4:
+                            bg_color = ft.Colors.ORANGE_900
+                            icon = ft.Icons.WARNING_AMBER
+                            icon_color = ft.Colors.ORANGE_300
+                            border_color = ft.Colors.ORANGE_700
+                            is_disabled = False
+                        else:
+                            bg_color = ft.Colors.RED_800
+                            icon = ft.Icons.PEOPLE
+                            icon_color = ft.Colors.RED_300
+                            border_color = ft.Colors.RED_700
+                            is_disabled = False
+                        
+                        def make_time_selector(sel_start, sel_end):
+                            def select_time(e):
+                                start_hour.value = str(sel_start)
+                                end_hour.value = str(sel_end)
+                                bs.open = False
+                                page.update()
+                                refresh_grid()
+                                show_message(
+                                    f'Saat {sel_start}:00 - {sel_end}:00 seçildi!',
+                                    ft.Colors.GREEN
+                                )
+                            return select_time
+                        
+                        card = ft.Container(
+                            content=ft.Row([
+                                ft.Icon(icon, color=icon_color, size=30),
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Row([
+                                            ft.Text(
+                                                f"{s_hour}:00 - {e_hour}:00",
+                                                size=16,
+                                                weight="bold"
+                                            )
+                                        ]),
+                                        ft.Text(
+                                            f"{avail_count} masa müsait" if status == 'available' 
+                                                else "Geçmiş zaman" if status == 'past'
+                                                else "Dolu",
+                                            size=12,
+                                            color="white70"
+                                        )
+                                    ], spacing=2),
+                                    expand=True
+                                ),
+                                ft.FilledButton(
+                                    "Seç",
+                                    on_click=make_time_selector(s_hour, e_hour),
+                                    style=ft.ButtonStyle(bgcolor=primary_color),
+                                    disabled=is_disabled
+                                ) if not is_disabled else ft.Text(
+                                    "Dolu" if status == 'full' else "Geçmiş",
+                                    color=ft.Colors.GREY_400
+                                )
+                            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                            bgcolor=bg_color,
+                            border_radius=10,
+                            padding=15,
+                            margin=5,
+                            border=ft.Border.all(2, border_color)
+                        )
+                        
+                        suggestion_cards.append(card)
+                    def quick_select(e):
+                        start_hour.value = str(best_start)
+                        end_hour.value = str(best_end)
+                        bs.open = False
+                        page.update()
+                        refresh_grid()
+                        show_message(
+                            f'En iyi zaman seçildi: {best_start}:00 - {best_end}:00',
+                            ft.Colors.GREEN
+                        )
+                    
+                    def close_sheet(e):
+                        print("Sheet closed")
+                        bs.open = False
+                        page.update()
+                    
+                    bs = ft.BottomSheet(
+                        content=ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.Text("En İyi Zaman Önerisi", size=22, weight="bold"),
+                                    ft.IconButton(
+                                        icon=ft.Icons.CLOSE,
+                                        on_click=close_sheet,
+                                        tooltip="Kapat"
+                                    )
+                                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                                
+                                ft.Divider(),
+                            
+                                ft.Container(
+                                    content=ft.Row([
+                                        ft.Column([
+                                            ft.Text(
+                                                f"En İyi: {best_start}:00 - {best_end}:00",
+                                                size=18,
+                                                weight="bold",
+                                                color=ft.Colors.GREEN_300
+                                            ),
+                                            ft.Text(
+                                                f"{max_avail} masa müsait (En sakin zaman)",
+                                                size=14,
+                                                color="white70"
+                                            )
+                                        ], spacing=2)
+                                    ]),
+                                    bgcolor=ft.Colors.GREEN_900,
+                                    padding=15,
+                                    border_radius=10,
+                                    border=ft.Border.all(2, ft.Colors.GREEN_400)
+                                ),
+                                
+                                ft.Divider(),
+                                
+                                ft.Text(
+                                    f"{date_str} | {duration} saat",
+                                    size=14,
+                                    weight="bold",
+                                    color=ft.Colors.CYAN_200
+                                ),
+                                
+                                ft.Text(
+                                    "Tüm zaman dilimleri (en iyiden en kötüye):",
+                                    size=12,
+                                    color="white70"
+                                ),
+                                
+                                ft.Container(
+                                    content=ft.Column(
+                                        suggestion_cards,
+                                        scroll=ft.ScrollMode.AUTO,
+                                    ),
+                                    height=300,
+                                    border_radius=10
+                                ),
+                                
+                                ft.Row([
+                                    ft.FilledButton(
+                                        "En İyiyi Seç",
+                                        icon=ft.Icons.STAR,
+                                        on_click=quick_select,
+                                        style=ft.ButtonStyle(bgcolor=primary_color),
+                                        expand=True
+                                    ),
+                                    ft.OutlinedButton(
+                                        "Kapat",
+                                        on_click=close_sheet,
+                                        expand=True
+                                    )
+                                ], spacing=10)
+                                
+                            ], spacing=15, scroll=ft.ScrollMode.AUTO),
+                            padding=20,
+                            bgcolor=card_bg,
+                            border_radius=ft.BorderRadius(20, 20, 0, 0)
+                        ),
+                        open=True
+                    )
+                    
+                    page.overlay.append(bs)
+                    bs.open = True
                     page.update()
-
-                    if isinstance(msg, str) and 'Öneri: Masa' in msg:
-                        try:
-                            parts = msg.split('Masa')
-                            num = int(parts[-1].strip())
-                            if num in table_cards:
-                                tid, c, free = table_cards[num]
-                                if free:
-                                    toggle_select(tid, num, c, free)
-                                    return
-                        except Exception as ex:
-                            print(f"Öneri parse hatası: {ex}")
-
+                    
+                except ValueError as ve:
+                    print(f"ValueError: {ve}")
+                    import traceback
+                    traceback.print_exc()
+                    show_message('Geçersiz tarih formatı!', ft.Colors.RED)
+                    
                 except Exception as ex:
-                    print(f"Öneri hatası: {ex}")
+                    print(f"ERROR: {ex}")
+                    import traceback
+                    traceback.print_exc()
                     show_message(f"Öneri alınamadı: {str(ex)}", ft.Colors.RED)
 
             header = ft.Row([
